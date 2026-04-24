@@ -1,0 +1,10 @@
+.idea/
+.venv/
+matlab/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+env/
+venv/
+.Python
