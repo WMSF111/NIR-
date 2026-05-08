@@ -4,4 +4,4 @@ scipy>=1.11
 scikit-learn>=1.4
 matplotlib>=3.8
 xgboost>=2.0
-tensorflow>=2.15  # For CNN, or use torch if preferred
+torch>=2.1  # Required by the PINN pipeline

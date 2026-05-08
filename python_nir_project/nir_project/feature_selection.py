@@ -17,7 +17,81 @@ import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import RFE
 from sklearn.linear_model import LinearRegression
-from typing import Any, Dict, Tuple
+from sklearn.preprocessing import StandardScaler
+from typing import Any, Dict, Iterable, Tuple
+
+
+def _scale_features(X: np.ndarray) -> np.ndarray:
+    """Scale feature columns to comparable units before selection."""
+    scaler = StandardScaler()
+    return scaler.fit_transform(X)
+
+
+def _self_check_default_param(method_name: str, feature_count: int) -> int:
+    """返回特征选择方法自检时使用的默认参数。"""
+    method_name = method_name.lower().strip()
+    if method_name == 'corr_topk':
+        return min(5, feature_count)
+    if method_name == 'pca':
+        return min(5, feature_count)
+    if method_name == 'spa':
+        return min(5, feature_count)
+    if method_name == 'cars':
+        return min(5, feature_count)
+    raise ValueError(f'Unsupported self-check method: {method_name}')
+
+
+def quick_self_check_feature_selection(
+    methods: Iterable[str] | None = None,
+    sample_count: int = 24,
+    feature_count: int = 12,
+    random_state: int = 0,
+) -> Dict[str, Any]:
+    """快速自检特征选择方法是否能正常运行。
+
+    该函数使用一份可复现的合成数据，依次调用指定的特征选择方法，
+    用于排查依赖缺失、输入形状错误或算法实现异常等问题。
+    """
+    supported_methods = ('spa', 'pca', 'cars', 'corr_topk')
+    methods_to_run = list(methods) if methods is not None else list(supported_methods)
+    normalized_methods = [method.lower().strip() for method in methods_to_run]
+
+    invalid_methods = [method for method in normalized_methods if method not in supported_methods]
+    if invalid_methods:
+        raise ValueError(f'Unsupported self-check methods: {invalid_methods}')
+
+    rng = np.random.default_rng(random_state)
+    X = rng.normal(size=(sample_count, feature_count))
+    y = (1.5 * X[:, 0] - 0.7 * X[:, 1] + 0.3 * X[:, 2] + 0.05 * rng.normal(size=sample_count)).astype(float)
+
+    print(
+        f'开始特征选择快速自检，共 {len(normalized_methods)} 个方法，'
+        f'样本数={sample_count}，特征数={feature_count}'
+    )
+
+    results: Dict[str, Any] = {}
+    for index, method_name in enumerate(normalized_methods, start=1):
+        fs_param = _self_check_default_param(method_name, feature_count)
+        print(f'[{index}/{len(normalized_methods)}] 自检方法={method_name} | 参数={fs_param}')
+        result = select_features_by_method(X, y, method_name, fs_param)
+        selected_idx = np.asarray(result['selected_idx'])
+        results[method_name] = {
+            'success': True,
+            'fs_param': fs_param,
+            'selected_count': int(selected_idx.size),
+            'selected_idx': selected_idx.tolist(),
+        }
+        print(
+            f'[{index}/{len(normalized_methods)}] 完成 {method_name} | '
+            f'选中特征数={selected_idx.size}'
+        )
+
+    return {
+        'success': True,
+        'sample_count': sample_count,
+        'feature_count': feature_count,
+        'methods': results,
+    }
 
 
 def feature_select_corr_topk(X: np.ndarray, y: np.ndarray, top_k: int) -> Tuple[np.ndarray, np.ndarray]:
@@ -70,9 +144,10 @@ def feature_select_pca(X: np.ndarray, top_k: int) -> Tuple[np.ndarray, np.ndarra
                 - explained_ratio: 方差解释率
                 - coeff: 主成分系数矩阵
     """
+    X_scaled = _scale_features(X)
     pca = PCA()
     scores = np.zeros(X.shape[1], dtype=float)
-    pca.fit(X)
+    pca.fit(X_scaled)
     explained = pca.explained_variance_ratio_
     cum_explained = np.cumsum(explained)
     n_pc = int(np.searchsorted(cum_explained, 0.99) + 1)
@@ -143,8 +218,9 @@ def feature_select_cars(X: np.ndarray, y: np.ndarray, target_count: int = None) 
         from sklearn.cross_decomposition import PLSRegression
     except ImportError:
         raise
+    X_scaled = _scale_features(X)
     plsr = PLSRegression(n_components=n_components)
-    plsr.fit(X, y)
+    plsr.fit(X_scaled, y)
     weights = np.sum(np.abs(plsr.x_weights_), axis=1)
     order = np.argsort(weights)[::-1]
     target_count = max(1, min(target_count, X.shape[1]))
@@ -178,7 +254,7 @@ def spa(X: np.ndarray, initial_idx: int, tot_n: int) -> np.ndarray:
     for _ in range(tot_n - 1):
         not_selected = [j for j in all_idx if j not in selected]
         aps = np.full(len(not_selected), -np.inf, dtype=float)
-        denom = float(specn.T @ specn)
+        denom = float((specn.T @ specn).item())
         if abs(denom) < 1e-12:
             denom = 1.0
         for idx, j in enumerate(not_selected):
@@ -236,8 +312,9 @@ def select_features_by_method(X: np.ndarray, y: np.ndarray, fs_method: str, fs_p
         return {'selected_idx': selected_idx, 'score': score, 'info': info}
     if method == 'rfe':
         top_k = int(fs_param) if fs_param is not None else min(40, X.shape[1])
+        X_scaled = _scale_features(X)
         selector = RFE(LinearRegression(), n_features_to_select=max(1, min(top_k, X.shape[1])), step=0.1)
-        selector.fit(X, y)
+        selector.fit(X_scaled, y)
         selected_idx = np.where(selector.support_)[0]
         score = np.full(X.shape[1], np.nan, dtype=float)
         score[selected_idx] = 1.0

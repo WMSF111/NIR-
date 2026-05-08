@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nir"
+version = "0.1.0"
+description = "Near-infrared property prediction pipelines and PINN experiments"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "matplotlib>=3.8",
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scikit-learn>=1.4",
+    "scipy>=1.11",
+    "torch>=2.1",
+    "xgboost>=2.0",
+]
+
+[project.scripts]
+run-property-prediction = "nir_project.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "python_nir_project"}
+
+[tool.setuptools.packages.find]
+where = ["python_nir_project"]

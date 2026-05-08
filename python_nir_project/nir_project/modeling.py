@@ -17,6 +17,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.cross_decomposition import PLSRegression
@@ -24,6 +26,7 @@ from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.model_selection import GridSearchCV, KFold
 from sklearn.neural_network import MLPRegressor
 from sklearn.neighbors import KNeighborsRegressor
@@ -32,12 +35,11 @@ from xgboost import XGBRegressor
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, Matern, RationalQuadratic, ConstantKernel as C
 
-from .data import load_dataset
+from .data import PROJECT_ROOT, load_dataset
 from .feature_selection import select_features_by_method
 from .preprocessing import preprocess_pair
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
+GRIDSEARCH_N_JOBS = 1
 
 def _kennard_stone_split(X: np.ndarray, k: int) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -101,6 +103,11 @@ def _evaluate_regression(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, An
     return {'r2': float(r2), 'rmse': float(rmse)}
 
 
+def _rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """兼容不同 sklearn 版本的 RMSE 计算。"""
+    return float(math.sqrt(mean_squared_error(y_true, y_pred)))
+
+
 def _train_pls(X: np.ndarray, y: np.ndarray, max_lv: int, cv_fold: int) -> Tuple[PLSRegression, int]:
     """
     训练PLS回归模型并选择最优主成分数量
@@ -128,7 +135,7 @@ def _train_pls(X: np.ndarray, y: np.ndarray, max_lv: int, cv_fold: int) -> Tuple
         for train_idx, valid_idx in cv.split(X):
             model.fit(X[train_idx], y[train_idx])
             pred = model.predict(X[valid_idx])
-            rmses.append(mean_squared_error(y[valid_idx], pred, squared=False))
+            rmses.append(_rmse(y[valid_idx], pred))
         avg_rmse = np.mean(rmses)
         if avg_rmse < best_rmse:
             best_rmse = avg_rmse
@@ -167,7 +174,7 @@ def _train_pcr(X: np.ndarray, y: np.ndarray, max_pc: int) -> Tuple[LinearRegress
         for train_idx, valid_idx in cv.split(score):
             reg.fit(score[train_idx, :n], y[train_idx])
             pred = reg.predict(score[valid_idx, :n])
-            rmses.append(mean_squared_error(y[valid_idx], pred, squared=False))
+            rmses.append(_rmse(y[valid_idx], pred))
         avg_rmse = np.mean(rmses)
         if avg_rmse < best_rmse:
             best_rmse = avg_rmse
@@ -197,7 +204,7 @@ def _train_svr(X: np.ndarray, y: np.ndarray, param_grid: Optional[Dict[str, Any]
             'C': [0.1, 1.0, 10.0],
             'gamma': ['scale', 'auto'],
         }
-    model = GridSearchCV(SVR(), param_grid, scoring='neg_root_mean_squared_error', cv=min(5, X.shape[0] - 1), n_jobs=-1)
+    model = GridSearchCV(SVR(), param_grid, scoring='neg_root_mean_squared_error', cv=min(5, X.shape[0] - 1), n_jobs=GRIDSEARCH_N_JOBS)
     model.fit(X, y)
     return model.best_estimator_, model.best_params_
 
@@ -218,7 +225,7 @@ def _train_rf(X: np.ndarray, y: np.ndarray, param_grid: Optional[Dict[str, Any]]
     """
     if param_grid is None:
         param_grid = {'n_estimators': [100, 200], 'min_samples_leaf': [1, 5, 10]}
-    model = GridSearchCV(RandomForestRegressor(random_state=1), param_grid, scoring='neg_root_mean_squared_error', cv=min(5, X.shape[0] - 1), n_jobs=-1)
+    model = GridSearchCV(RandomForestRegressor(random_state=1), param_grid, scoring='neg_root_mean_squared_error', cv=min(5, X.shape[0] - 1), n_jobs=GRIDSEARCH_N_JOBS)
     model.fit(X, y)
     return model.best_estimator_, model.best_params_
 
@@ -239,7 +246,7 @@ def _train_knn(X: np.ndarray, y: np.ndarray, param_grid: Optional[Dict[str, Any]
     """
     if param_grid is None:
         param_grid = {'n_neighbors': [3, 5, 7], 'weights': ['uniform', 'distance'], 'metric': ['euclidean', 'manhattan']}
-    model = GridSearchCV(KNeighborsRegressor(), param_grid, scoring='neg_root_mean_squared_error', cv=min(5, X.shape[0] - 1), n_jobs=-1)
+    model = GridSearchCV(KNeighborsRegressor(), param_grid, scoring='neg_root_mean_squared_error', cv=min(5, X.shape[0] - 1), n_jobs=GRIDSEARCH_N_JOBS)
     model.fit(X, y)
     return model.best_estimator_, model.best_params_
 
@@ -265,7 +272,7 @@ def _train_cnn(X: np.ndarray, y: np.ndarray, param_grid: Optional[Dict[str, Any]
             'alpha': [0.0001, 0.001, 0.01],
             'max_iter': [1000]
         }
-    model = GridSearchCV(MLPRegressor(random_state=1), param_grid, scoring='neg_root_mean_squared_error', cv=min(5, X.shape[0] - 1), n_jobs=-1)
+    model = GridSearchCV(MLPRegressor(random_state=1), param_grid, scoring='neg_root_mean_squared_error', cv=min(5, X.shape[0] - 1), n_jobs=GRIDSEARCH_N_JOBS)
     model.fit(X, y)
     return model.best_estimator_, model.best_params_
 
@@ -291,7 +298,7 @@ def _train_xgb(X: np.ndarray, y: np.ndarray, param_grid: Optional[Dict[str, Any]
             'learning_rate': [0.01, 0.1, 0.2],
             'subsample': [0.8, 1.0]
         }
-    model = GridSearchCV(XGBRegressor(random_state=1), param_grid, scoring='neg_root_mean_squared_error', cv=min(5, X.shape[0] - 1), n_jobs=-1)
+    model = GridSearchCV(XGBRegressor(random_state=1), param_grid, scoring='neg_root_mean_squared_error', cv=min(5, X.shape[0] - 1), n_jobs=GRIDSEARCH_N_JOBS)
     model.fit(X, y)
     return model.best_estimator_, model.best_params_
 
@@ -317,7 +324,7 @@ def _train_gpr(X: np.ndarray, y: np.ndarray, param_grid: Optional[Dict[str, Any]
         'matern32': C(1.0, (1e-3, 1e3)) * Matern(length_scale=1.0, nu=1.5),
         'matern52': C(1.0, (1e-3, 1e3)) * Matern(length_scale=1.0, nu=2.5),
     }
-    class GPRWrapper:
+    class GPRWrapper(BaseEstimator, RegressorMixin):
         def __init__(self, kernel='squaredexponential'):
             self.kernel = kernel
         def fit(self, X, y):
@@ -328,7 +335,7 @@ def _train_gpr(X: np.ndarray, y: np.ndarray, param_grid: Optional[Dict[str, Any]
             return self.gpr_.predict(X, return_std=False)
         def score(self, X, y):
             return self.gpr_.score(X, y)
-    model = GridSearchCV(GPRWrapper(), param_grid, scoring='neg_root_mean_squared_error', cv=min(5, X.shape[0] - 1), n_jobs=-1)
+    model = GridSearchCV(GPRWrapper(), param_grid, scoring='neg_root_mean_squared_error', cv=min(5, X.shape[0] - 1), n_jobs=GRIDSEARCH_N_JOBS)
     model.fit(X, y)
     return model.best_estimator_.gpr_, model.best_params_
 
@@ -411,6 +418,8 @@ def train_model_from_dataset(dataset_path: Path, method_name: str, method_param:
     n_samples = X.shape[0]
     if y.shape[0] != n_samples:
         raise ValueError('X and y sample counts do not match')
+    if n_samples < 4:
+        raise ValueError('At least 4 samples are required to train and evaluate a model safely')
 
     preproc_mode = metadata.get('preproc_mode', 'sg+msc')
     sg_order = int(metadata.get('sg_order', 3))
@@ -560,16 +569,15 @@ def _preprocess_split(
             - 预处理后的训练集特征矩阵
             - 预处理后的测试集特征矩阵
     """
-    X_train = X.copy()
-    X_test = X.copy()
-    if preproc_mode.lower().strip() == 'none':
-        return X_train, X_test
     return preprocess_pair(
-        X_train,
-        X_test,
+        X.copy(),
+        X.copy(),
         preproc_mode=preproc_mode,
         sg_order=sg_order,
         sg_window=sg_window,
         msc_ref_mode=msc_ref_mode,
         snv_mode=snv_mode,
+        baseline_zero_mode=baseline_zero_mode,
+        baseline_zero_scope=baseline_zero_scope,
+        despike_mode=despike_mode,
     )

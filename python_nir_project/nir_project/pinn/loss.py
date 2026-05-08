@@ -1,20 +1,4 @@
-"""
-PINN物理损失函数模块
-
-该模块实现了基于物理信息的神经网络(PINN)损失函数，
-结合数据驱动的监督损失和基于Arrhenius方程的物理约束损失。
-
-主要功能：
-- Arrhenius速率常数计算
-- PINN基础损失函数（数据损失+物理损失）
-- 扩展损失函数（支持网络预测动力学参数）
-- 动力学参数光滑性约束
-
-物理约束：
-- 一阶动力学：dC/dt = -k*C
-- 二阶动力学：dC/dt = -k*C²
-- Arrhenius方程：k = k0*exp(-E_a/(R*T))
-"""
+"""PINN 训练中的损失函数，包含数据损失与 Arrhenius 物理约束损失。"""
 
 import torch
 import torch.nn as nn
@@ -130,7 +114,6 @@ class PINNLoss(nn.Module):
     def compute_physics_loss(
         self,
         C_pred: torch.Tensor,
-        C_values: torch.Tensor,
         times: torch.Tensor,
         temperatures: torch.Tensor,
         dC_dt: torch.Tensor,
@@ -147,7 +130,6 @@ class PINNLoss(nn.Module):
 
         Args:
             C_pred (torch.Tensor): 预测的质量值，形状为[batch_size, 1]
-            C_values (torch.Tensor): 实际质量值，形状为[batch_size, 1]
             times (torch.Tensor): 时间，形状为[batch_size, 1]
             temperatures (torch.Tensor): 温度（Kelvin），形状为[batch_size, 1]
             dC_dt (torch.Tensor): 预测值的时间导数，形状为[batch_size, 1]
@@ -212,7 +194,7 @@ class PINNLoss(nn.Module):
 
         # 物理损失 (在所有配点上计算)
         loss_physics = self.compute_physics_loss(
-            C_pred, C_true, times, temperatures, dC_dt
+            C_pred, times, temperatures, dC_dt
         )
 
         # 总损失

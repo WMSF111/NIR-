@@ -1,0 +1,10 @@
+{
+  "property_names": [
+    "a*"
+  ],
+  "preproc_mode": "sg+msc+snv",
+  "sg_order": 3,
+  "sg_window": 5,
+  "feature_selection_method": "all",
+  "include_preprocessed_group": false
+}

@@ -27,7 +27,17 @@ import numpy as np
 import pandas as pd
 
 # 项目根目录路径
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+def _resolve_project_root() -> Path:
+    """自动定位包含 data 目录的项目根目录。"""
+    current = Path(__file__).resolve()
+    for candidate in current.parents:
+        if (candidate / 'data').exists():
+            return candidate
+    return current.parents[1]
+
+
+PROJECT_ROOT = _resolve_project_root()
 
 
 def load_csv_spectrum(path: Path) -> np.ndarray:
@@ -256,8 +266,12 @@ def save_dataset(
     if metadata is None:
         metadata = {}
     metadata = dict(metadata)
+    metadata['dataset_tag'] = dataset_tag
+    metadata['sample_count'] = X.shape[0]
+    metadata['feature_count'] = X.shape[1]
+    metadata['created_at'] = pd.Timestamp.now().isoformat()
+    metadata['keep_exports'] = keep_exports
 
-    # 确定保存目录
     if keep_exports:
         dataset_dir = PROJECT_ROOT / 'result' / 'dataset' / dataset_tag
     else:
@@ -279,13 +293,6 @@ def save_dataset(
             )
 
     # 更新元数据
-    metadata['dataset_tag'] = dataset_tag
-    metadata['sample_count'] = X.shape[0]
-    metadata['feature_count'] = X.shape[1]
-    metadata['created_at'] = pd.Timestamp.now().isoformat()
-    metadata['keep_exports'] = keep_exports
-
-    # 构建返回字典
     dataset = {
         'X': X,
         'y': y.reshape(-1),

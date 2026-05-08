@@ -18,6 +18,14 @@ from scipy.signal import savgol_filter, medfilt
 from typing import Optional
 
 
+def parse_preproc_mode(preproc_mode: str) -> set[str]:
+    """Normalize a preprocessing mode string into a set of enabled steps."""
+    mode = (preproc_mode or 'none').lower().strip()
+    if mode == 'none':
+        return set()
+    return {token.strip() for token in mode.split('+') if token.strip() and token.strip() != 'none'}
+
+
 def apply_sg(X: np.ndarray, order: int, window: int) -> np.ndarray:
     """
     应用Savitzky-Golay滤波进行光谱平滑
@@ -293,15 +301,16 @@ def preprocess_spectrum(
         np.ndarray: 预处理后的光谱数据
     """
     X_out = X.copy()
+    mode_tokens = parse_preproc_mode(preproc_mode)
     if baseline_zero_scope == 'full_spectrum':
         X_out = baseline_zero(X_out, baseline_zero_mode, baseline_zero_scope)
         X_out = despike(X_out, despike_mode)
-    if preproc_mode != 'none':
-        if 'sg' in preproc_mode:
+    if mode_tokens:
+        if 'sg' in mode_tokens:
             X_out = apply_sg(X_out, sg_order, sg_window)
-        if 'msc' in preproc_mode:
+        if 'msc' in mode_tokens:
             X_out = apply_msc(X_out, msc_ref_mode)
-        if 'snv' in preproc_mode:
+        if 'snv' in mode_tokens:
             X_out = apply_snv(X_out, snv_mode)
     if baseline_zero_scope != 'full_spectrum':
         X_out = baseline_zero(X_out, baseline_zero_mode, baseline_zero_scope)
@@ -317,6 +326,9 @@ def preprocess_pair(
     sg_window: int = 15,
     msc_ref_mode: str = 'mean',
     snv_mode: str = 'standard',
+    baseline_zero_mode: str = 'none',
+    baseline_zero_scope: str = 'cropped_spectrum',
+    despike_mode: str = 'none',
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     对训练集和测试集光谱对执行相同的预处理
@@ -339,19 +351,29 @@ def preprocess_pair(
         ValueError: 当msc_ref_mode不支持时抛出
     """
     mode = preproc_mode.lower().strip()
-    if mode == 'none':
-        return X_train, X_test
-    X_train_proc = X_train.copy()
-    X_test_proc = X_test.copy()
-    if 'sg' in mode:
-        X_train_proc = apply_sg(X_train_proc, sg_order, sg_window)
-        X_test_proc = apply_sg(X_test_proc, sg_order, sg_window)
-    if 'msc' in mode:
-        if msc_ref_mode not in {'mean', 'median', 'first'}:
-            raise ValueError(f'Unsupported MSC mode: {msc_ref_mode}')
-        X_train_proc = apply_msc(X_train_proc, msc_ref_mode)
-        X_test_proc = apply_msc(X_test_proc, msc_ref_mode)
-    if 'snv' in mode:
-        X_train_proc = apply_snv(X_train_proc, snv_mode)
-        X_test_proc = apply_snv(X_test_proc, snv_mode)
+    if mode != 'none' and msc_ref_mode not in {'mean', 'median', 'first'}:
+        raise ValueError(f'Unsupported MSC mode: {msc_ref_mode}')
+
+    X_train_proc = preprocess_spectrum(
+        X_train.copy(),
+        preproc_mode=preproc_mode,
+        sg_order=sg_order,
+        sg_window=sg_window,
+        msc_ref_mode=msc_ref_mode,
+        snv_mode=snv_mode,
+        baseline_zero_mode=baseline_zero_mode,
+        baseline_zero_scope=baseline_zero_scope,
+        despike_mode=despike_mode,
+    )
+    X_test_proc = preprocess_spectrum(
+        X_test.copy(),
+        preproc_mode=preproc_mode,
+        sg_order=sg_order,
+        sg_window=sg_window,
+        msc_ref_mode=msc_ref_mode,
+        snv_mode=snv_mode,
+        baseline_zero_mode=baseline_zero_mode,
+        baseline_zero_scope=baseline_zero_scope,
+        despike_mode=despike_mode,
+    )
     return X_train_proc, X_test_proc

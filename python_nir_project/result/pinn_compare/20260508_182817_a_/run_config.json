@@ -1,0 +1,11 @@
+{
+  "property_names": [
+    "a*"
+  ],
+  "model_type": "PINN",
+  "preproc_mode": "sg+msc+snv",
+  "sg_order": 3,
+  "sg_window": 5,
+  "feature_selection_method": "all",
+  "fs_param": null
+}

@@ -13,10 +13,15 @@ NIR光谱分析管道模块
 from __future__ import annotations
 
 import csv
+import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import pandas as pd
 import torch
 
 from .data import (
@@ -42,6 +47,157 @@ def _safe_tag(name: str) -> str:
         str: 安全的文件名字符串
     """
     return ''.join(c if c.isalnum() or c == '_' else '_' for c in name)
+
+
+def _parse_property_names(value: str) -> List[str]:
+    """将逗号分隔的属性名字符串解析为列表。"""
+    return [item.strip() for item in value.split(',') if item.strip()]
+
+
+def _result_to_summary_row(property_name: str, result: Dict[str, Any], rank: int) -> Dict[str, Any]:
+    """将单个模型结果展平为摘要表的一行。"""
+    metrics = result['metrics']
+    return {
+        'property_name': property_name,
+        'rank': rank,
+        'group': result.get('group', ''),
+        'feature_selection': result.get('feature_selection', ''),
+        'fs_param': result.get('fs_param'),
+        'model': result.get('method', ''),
+        'train_r2': metrics['train']['r2'],
+        'train_rmse': metrics['train']['rmse'],
+        'test_r2': metrics['test']['r2'],
+        'test_rmse': metrics['test']['rmse'],
+        'dataset_tag': result.get('dataset_tag', ''),
+        'plot_path': result.get('plot_path', ''),
+        'best_param_json': json.dumps(result.get('best_param', {}), ensure_ascii=False, sort_keys=True),
+    }
+
+
+def _append_prediction_rows(rows: List[Dict[str, Any]], property_name: str, result: Dict[str, Any]) -> None:
+    """将训练集和测试集预测结果追加到逐样本预测表。"""
+    split_config = [
+        ('train', result.get('ytrain', []), result.get('ypred_train', [])),
+        ('test', result.get('ytest', []), result.get('ypred', [])),
+    ]
+    for split_name, truths, preds in split_config:
+        for sample_index, (truth, pred) in enumerate(zip(truths, preds), start=1):
+            rows.append(
+                {
+                    'property_name': property_name,
+                    'group': result.get('group', ''),
+                    'feature_selection': result.get('feature_selection', ''),
+                    'fs_param': result.get('fs_param'),
+                    'model': result.get('method', ''),
+                    'split': split_name,
+                    'sample_index': sample_index,
+                    'y_true': truth,
+                    'y_pred': pred,
+                }
+            )
+
+
+def _save_property_comparison_plot(property_name: str, rows: List[Dict[str, Any]], output_dir: Path) -> str:
+    """保存单个属性下不同算法的对比总览图。"""
+    df = pd.DataFrame(rows).sort_values(by=['test_r2', 'test_rmse'], ascending=[False, True])
+    labels = [
+        f"{row['model']}|{row['feature_selection']}|{row['fs_param']}"
+        for _, row in df.iterrows()
+    ]
+
+    fig, axes = plt.subplots(1, 2, figsize=(max(10, len(labels) * 0.55), 6))
+    axes[0].bar(range(len(labels)), df['test_r2'], color='#2C7FB8')
+    axes[0].set_title(f'{property_name} 测试集 R2 对比')
+    axes[0].set_ylabel('R2')
+    axes[0].set_xticks(range(len(labels)))
+    axes[0].set_xticklabels(labels, rotation=60, ha='right', fontsize=8)
+    axes[0].grid(axis='y', alpha=0.3)
+
+    axes[1].bar(range(len(labels)), df['test_rmse'], color='#D95F0E')
+    axes[1].set_title(f'{property_name} 测试集 RMSE 对比')
+    axes[1].set_ylabel('RMSE')
+    axes[1].set_xticks(range(len(labels)))
+    axes[1].set_xticklabels(labels, rotation=60, ha='right', fontsize=8)
+    axes[1].grid(axis='y', alpha=0.3)
+
+    plt.tight_layout()
+    plot_path = output_dir / f'{_safe_tag(property_name)}_algorithm_comparison.png'
+    fig.savefig(plot_path, dpi=150)
+    plt.close(fig)
+    return str(plot_path)
+
+
+def _persist_batch_compare_outputs(
+    output_dir: Path,
+    summary_rows: List[Dict[str, Any]],
+    prediction_rows: List[Dict[str, Any]],
+    property_names: List[str],
+    preproc_mode: str,
+    sg_order: int,
+    sg_window: int,
+    feature_selection_method: str,
+    include_preprocessed_group: bool,
+) -> Dict[str, str]:
+    """将批量对比的中间结果立即落盘，避免中途中断后丢失数据。"""
+    summary_df = pd.DataFrame(summary_rows)
+    prediction_df = pd.DataFrame(prediction_rows)
+    if summary_df.empty:
+        parameter_df = pd.DataFrame(
+            columns=[
+                'property_name',
+                'rank',
+                'group',
+                'feature_selection',
+                'fs_param',
+                'model',
+                'dataset_tag',
+                'best_param_json',
+            ]
+        )
+    else:
+        parameter_df = summary_df[
+            [
+                'property_name',
+                'rank',
+                'group',
+                'feature_selection',
+                'fs_param',
+                'model',
+                'dataset_tag',
+                'best_param_json',
+            ]
+        ].copy()
+
+    summary_path = output_dir / 'metrics_summary.csv'
+    prediction_path = output_dir / 'prediction_table.csv'
+    parameter_path = output_dir / 'parameter_table.csv'
+    config_path = output_dir / 'run_config.json'
+
+    summary_df.to_csv(summary_path, index=False, encoding='utf-8-sig')
+    prediction_df.to_csv(prediction_path, index=False, encoding='utf-8-sig')
+    parameter_df.to_csv(parameter_path, index=False, encoding='utf-8-sig')
+    config_path.write_text(
+        json.dumps(
+            {
+                'property_names': property_names,
+                'preproc_mode': preproc_mode,
+                'sg_order': sg_order,
+                'sg_window': sg_window,
+                'feature_selection_method': feature_selection_method,
+                'include_preprocessed_group': include_preprocessed_group,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    return {
+        'metrics_summary_path': str(summary_path),
+        'prediction_table_path': str(prediction_path),
+        'parameter_table_path': str(parameter_path),
+        'config_path': str(config_path),
+    }
 
 
 def list_all_csv_headers() -> List[str]:
@@ -141,6 +297,7 @@ def compare_property_prediction_pipeline(
     sg_order: int = 3,
     sg_window: int = 35,
     include_preprocessed_group: bool = False,
+    result_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> List[Dict[str, Any]]:
     """
     比较不同模型和参数组合的属性预测性能
@@ -187,6 +344,16 @@ def compare_property_prediction_pipeline(
     }
 
     results = []
+    total_jobs = len(regressors) * len(fs_param_grid[feature_selection_method])
+    if include_preprocessed_group:
+        total_jobs += len(regressors)
+    completed_jobs = 0
+
+    print(
+        f"[{property_name}] 开始算法对比，共 {total_jobs} 个训练任务，"
+        f"特征选择方法: {feature_selection_method}，预处理: {filter_method}"
+    )
+
     if include_preprocessed_group:
         dataset_pre = prepare_property_dataset(
             property_name,
@@ -201,12 +368,25 @@ def compare_property_prediction_pipeline(
             keep_exports=False,
         )
         for method in regressors:
+            completed_jobs += 1
+            print(
+                f"[{property_name}] 进度 {completed_jobs}/{total_jobs} | "
+                f"数据组=preprocessed | 模型={method}"
+            )
             result = train_model_from_dataset(Path(dataset_pre['paths']['npz']), method, regressor_params[method])
             result['group'] = 'preprocessed'
             result['feature_selection'] = 'none'
             results.append(result)
+            if result_callback is not None:
+                result_callback(result)
+            print(
+                f"[{property_name}] 完成 {method} | "
+                f"Test R2={result['metrics']['test']['r2']:.4f} | "
+                f"RMSE={result['metrics']['test']['rmse']:.4f}"
+            )
 
     for fs_param in fs_param_grid[feature_selection_method]:
+        print(f"[{property_name}] 准备特征选择参数 fs_param={fs_param}")
         dataset_sel = prepare_property_dataset(
             property_name,
             data_stage='selected',
@@ -220,13 +400,32 @@ def compare_property_prediction_pipeline(
             keep_exports=False,
         )
         for method in regressors:
+            completed_jobs += 1
+            print(
+                f"[{property_name}] 进度 {completed_jobs}/{total_jobs} | "
+                f"数据组=selected | fs_param={fs_param} | 模型={method}"
+            )
             result = train_model_from_dataset(Path(dataset_sel['paths']['npz']), method, regressor_params[method])
             result['group'] = 'selected'
             result['feature_selection'] = feature_selection_method
             result['fs_param'] = fs_param
             results.append(result)
+            if result_callback is not None:
+                result_callback(result)
+            print(
+                f"[{property_name}] 完成 {method} | fs_param={fs_param} | "
+                f"Test R2={result['metrics']['test']['r2']:.4f} | "
+                f"RMSE={result['metrics']['test']['rmse']:.4f}"
+            )
 
     results.sort(key=lambda info: (info['group'], -info['metrics']['test']['r2'], info['metrics']['test']['rmse']))
+    if results:
+        best_result = max(results, key=lambda info: info['metrics']['test']['r2'])
+        print(
+            f"[{property_name}] 对比完成，最佳模型={best_result['method']} | "
+            f"Test R2={best_result['metrics']['test']['r2']:.4f} | "
+            f"RMSE={best_result['metrics']['test']['rmse']:.4f}"
+        )
     return results
 
 
@@ -265,6 +464,44 @@ def process_by_all_csv_feature_selection_only(
     )
 
 
+def compare_all_feature_selection_pipeline(
+    property_name: str,
+    filter_method: str = 'sg+msc+snv',
+    sg_order: int = 3,
+    sg_window: int = 35,
+    include_preprocessed_group: bool = False,
+    result_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> List[Dict[str, Any]]:
+    """依次运行全部特征选择方法，并汇总模型对比结果。"""
+    all_results: List[Dict[str, Any]] = []
+    supported_fs_methods = ['cars', 'pca', 'corr_topk', 'spa']
+
+    print(f"[{property_name}] 开始全部特征选择对比，共 {len(supported_fs_methods)} 类特征选择方法")
+    for index, current_fs_method in enumerate(supported_fs_methods, start=1):
+        print(f"[{property_name}] 特征选择方法进度 {index}/{len(supported_fs_methods)} | fs={current_fs_method}")
+        method_results = compare_property_prediction_pipeline(
+            property_name=property_name,
+            filter_method=filter_method,
+            feature_selection_method=current_fs_method,
+            sg_order=sg_order,
+            sg_window=sg_window,
+            include_preprocessed_group=include_preprocessed_group and index == 1,
+            result_callback=result_callback,
+        )
+        all_results.extend(method_results)
+
+    all_results.sort(key=lambda info: (info['group'], -info['metrics']['test']['r2'], info['metrics']['test']['rmse']))
+    if all_results:
+        best_result = max(all_results, key=lambda info: info['metrics']['test']['r2'])
+        print(
+            f"[{property_name}] 全部特征选择对比完成，最佳组合="
+            f"{best_result.get('feature_selection', 'unknown')} + {best_result['method']} | "
+            f"Test R2={best_result['metrics']['test']['r2']:.4f} | "
+            f"RMSE={best_result['metrics']['test']['rmse']:.4f}"
+        )
+    return all_results
+
+
 def process_by_all_csv_with_feature_selection(
     property_name: str,
     preproc_mode: str = 'sg+msc',
@@ -300,6 +537,37 @@ def process_by_all_csv_with_feature_selection(
     )
 
 
+def train_single_property_prediction(
+    property_name: str,
+    preproc_mode: str = 'sg+msc',
+    sg_order: int = 3,
+    sg_window: int = 15,
+    fs_method: str = 'corr_topk',
+    fs_param: Any = None,
+    regressor: str = 'pls',
+    regressor_param: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """执行单次传统建模训练。"""
+    resolved_fs_param = fs_param if fs_param is not None else _default_fs_param(fs_method)
+    dataset = prepare_property_dataset(
+        property_name,
+        data_stage='selected',
+        preproc_mode=preproc_mode,
+        sg_order=sg_order,
+        sg_window=sg_window,
+        fs_method=fs_method,
+        fs_param=resolved_fs_param,
+    )
+    result = train_model_from_dataset(Path(dataset['paths']['npz']), regressor, regressor_param)
+    result['group'] = 'selected'
+    result['feature_selection'] = fs_method
+    result['fs_param'] = resolved_fs_param
+    if 'metadata' in dataset:
+        result['dataset_metadata'] = dataset['metadata']
+    result['dataset_metadata'] = dataset_metadata
+    return result
+
+
 def _default_fs_param(method_name: str) -> Any:
     """
     获取特征选择方法的默认参数
@@ -319,6 +587,8 @@ def _default_fs_param(method_name: str) -> Any:
         return 40
     if method_name == 'cars':
         return 120
+    if method_name == 'corr_topk':
+        return 20
     return None
 
 
@@ -345,22 +615,440 @@ def process_by_all_csv_header(
     return [result]
 
 
+def batch_compare_property_prediction(
+    property_names: List[str],
+    preproc_mode: str = 'sg+msc',
+    sg_order: int = 3,
+    sg_window: int = 15,
+    feature_selection_method: str = 'pca',
+    include_preprocessed_group: bool = False,
+) -> Dict[str, Any]:
+    """批量处理多个属性，并输出算法对比结果、预测图和参数表。"""
+    property_names = [name.strip() for name in property_names if name.strip()]
+    if not property_names:
+        raise ValueError('property_names 不能为空')
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    safe_batch_name = '_'.join(_safe_tag(name) for name in property_names[:3])
+    if len(property_names) > 3:
+        safe_batch_name += f'_plus_{len(property_names) - 3}'
+    output_dir = PROJECT_ROOT / 'result' / 'batch_compare' / f'{timestamp}_{safe_batch_name}'
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    summary_rows: List[Dict[str, Any]] = []
+    prediction_rows: List[Dict[str, Any]] = []
+    property_plot_paths: Dict[str, str] = {}
+    raw_results: Dict[str, List[Dict[str, Any]]] = {}
+    _persist_batch_compare_outputs(
+        output_dir=output_dir,
+        summary_rows=summary_rows,
+        prediction_rows=prediction_rows,
+        property_names=property_names,
+        preproc_mode=preproc_mode,
+        sg_order=sg_order,
+        sg_window=sg_window,
+        feature_selection_method=feature_selection_method,
+        include_preprocessed_group=include_preprocessed_group,
+    )
+
+    print(
+        f"开始批量算法对比，共 {len(property_names)} 个属性，"
+        f"预处理={preproc_mode}，特征选择={feature_selection_method}"
+    )
+
+    for property_index, property_name in enumerate(property_names, start=1):
+        print(f"========== 属性进度 {property_index}/{len(property_names)}：{property_name} ==========")
+        property_rows: List[Dict[str, Any]] = []
+
+        def persist_single_result(result: Dict[str, Any]) -> None:
+            rank = len(property_rows) + 1
+            row = _result_to_summary_row(property_name, result, rank)
+            summary_rows.append(row)
+            property_rows.append(row)
+            _append_prediction_rows(prediction_rows, property_name, result)
+            persisted_paths = _persist_batch_compare_outputs(
+                output_dir=output_dir,
+                summary_rows=summary_rows,
+                prediction_rows=prediction_rows,
+                property_names=property_names,
+                preproc_mode=preproc_mode,
+                sg_order=sg_order,
+                sg_window=sg_window,
+                feature_selection_method=feature_selection_method,
+                include_preprocessed_group=include_preprocessed_group,
+            )
+            print(f"[{property_name}] 中间结果已保存: {persisted_paths['metrics_summary_path']}")
+
+        if feature_selection_method.lower().strip() == 'all':
+            results = compare_all_feature_selection_pipeline(
+                property_name=property_name,
+                filter_method=preproc_mode,
+                sg_order=sg_order,
+                sg_window=sg_window,
+                include_preprocessed_group=include_preprocessed_group,
+                result_callback=persist_single_result,
+            )
+        else:
+            results = compare_property_prediction_pipeline(
+                property_name=property_name,
+                filter_method=preproc_mode,
+                feature_selection_method=feature_selection_method,
+                sg_order=sg_order,
+                sg_window=sg_window,
+                include_preprocessed_group=include_preprocessed_group,
+                result_callback=persist_single_result,
+            )
+        raw_results[property_name] = results
+        if not property_rows:
+            for rank, result in enumerate(results, start=1):
+                row = _result_to_summary_row(property_name, result, rank)
+                summary_rows.append(row)
+                property_rows.append(row)
+                _append_prediction_rows(prediction_rows, property_name, result)
+        property_plot_paths[property_name] = _save_property_comparison_plot(property_name, property_rows, output_dir)
+        persisted_paths = _persist_batch_compare_outputs(
+            output_dir=output_dir,
+            summary_rows=summary_rows,
+            prediction_rows=prediction_rows,
+            property_names=property_names,
+            preproc_mode=preproc_mode,
+            sg_order=sg_order,
+            sg_window=sg_window,
+            feature_selection_method=feature_selection_method,
+            include_preprocessed_group=include_preprocessed_group,
+        )
+        print(f"[{property_name}] 中间结果已保存: {persisted_paths['metrics_summary_path']}")
+        print(f"[{property_name}] 总览图已保存: {property_plot_paths[property_name]}")
+
+    summary_df = pd.DataFrame(summary_rows)
+    prediction_df = pd.DataFrame(prediction_rows)
+    parameter_df = summary_df[
+        [
+            'property_name',
+            'rank',
+            'group',
+            'feature_selection',
+            'fs_param',
+            'model',
+            'dataset_tag',
+            'best_param_json',
+        ]
+    ].copy()
+
+    summary_path = output_dir / 'metrics_summary.csv'
+    prediction_path = output_dir / 'prediction_table.csv'
+    parameter_path = output_dir / 'parameter_table.csv'
+    config_path = output_dir / 'run_config.json'
+
+    summary_df.to_csv(summary_path, index=False, encoding='utf-8-sig')
+    prediction_df.to_csv(prediction_path, index=False, encoding='utf-8-sig')
+    parameter_df.to_csv(parameter_path, index=False, encoding='utf-8-sig')
+    config_path.write_text(
+        json.dumps(
+            {
+                'property_names': property_names,
+                'preproc_mode': preproc_mode,
+                'sg_order': sg_order,
+                'sg_window': sg_window,
+                'feature_selection_method': feature_selection_method,
+                'include_preprocessed_group': include_preprocessed_group,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    print(f"批量对比完成，结果目录: {output_dir}")
+    print(f"指标汇总表: {summary_path}")
+    print(f"参数汇总表: {parameter_path}")
+    print(f"预测结果表: {prediction_path}")
+
+    return {
+        'output_dir': str(output_dir),
+        'metrics_summary_path': str(summary_path),
+        'prediction_table_path': str(prediction_path),
+        'parameter_table_path': str(parameter_path),
+        'config_path': str(config_path),
+        'property_plot_paths': property_plot_paths,
+        'results': raw_results,
+    }
+
+
+def _pinn_fs_param_grid(feature_selection_method: str, explicit_fs_param: Any = None) -> Dict[str, List[Any]]:
+    """返回 PINN 特征选择对比计划。"""
+    grids: Dict[str, List[Any]] = {
+        'cars': [120, 150],
+        'pca': [40, 80, 120, 160, 200],
+        'corr_topk': [20, 40, 80, 120],
+        'spa': [8, 12, 16, 20],
+    }
+    resolved_method = (feature_selection_method or 'corr_topk').lower().strip()
+    if resolved_method == 'all':
+        if explicit_fs_param is not None:
+            return {name: [explicit_fs_param] for name in grids}
+        return grids
+    if resolved_method not in grids:
+        raise ValueError(f'Unsupported PINN feature selection method: {feature_selection_method}')
+    if explicit_fs_param is not None:
+        return {resolved_method: [explicit_fs_param]}
+    return {resolved_method: grids[resolved_method]}
+
+
+def _pinn_result_to_summary_row(property_name: str, result: Dict[str, Any], rank: int) -> Dict[str, Any]:
+    """将 PINN 单次运行结果整理为汇总表一行。"""
+    metrics = result['test_metrics']
+    metadata = result.get('dataset_metadata', {}) or {}
+    return {
+        'property_name': property_name,
+        'rank': rank,
+        'feature_selection': metadata.get('fs_method'),
+        'fs_param': metadata.get('fs_param'),
+        'original_feature_count': metadata.get('original_feature_count'),
+        'selected_feature_count': metadata.get('selected_feature_count'),
+        'r2': metrics.get('r2'),
+        'rmse': metrics.get('rmse'),
+        'mae': metrics.get('mae'),
+        'rpd': metrics.get('rpd'),
+        'result_dir': result.get('result_dir', ''),
+        'prediction_table_path': result.get('prediction_table_path', ''),
+        'metrics_path': result.get('metrics_path', ''),
+        'training_history_path': result.get('training_history_path', ''),
+        'run_config_path': result.get('run_config_path', ''),
+        'selected_feature_idx_json': json.dumps(metadata.get('selected_feature_idx'), ensure_ascii=False),
+    }
+
+
+def _append_pinn_prediction_rows(rows: List[Dict[str, Any]], property_name: str, result: Dict[str, Any]) -> None:
+    """读取 PINN 预测结果表并追加到批量汇总。"""
+    prediction_path = result.get('prediction_table_path')
+    if not prediction_path:
+        return
+    df = pd.read_csv(prediction_path)
+    metadata = result.get('dataset_metadata', {}) or {}
+    for record in df.to_dict(orient='records'):
+        record['property_name'] = property_name
+        record['feature_selection'] = metadata.get('fs_method')
+        record['fs_param'] = metadata.get('fs_param')
+        rows.append(record)
+
+
+def _persist_pinn_compare_outputs(
+    output_dir: Path,
+    summary_rows: List[Dict[str, Any]],
+    prediction_rows: List[Dict[str, Any]],
+    property_names: List[str],
+    preproc_mode: str,
+    sg_order: int,
+    sg_window: int,
+    feature_selection_method: str,
+    fs_param: Any,
+) -> Dict[str, str]:
+    """将 PINN compare 的中间结果持续写盘。"""
+    summary_df = pd.DataFrame(summary_rows)
+    prediction_df = pd.DataFrame(prediction_rows)
+    parameter_df = summary_df[
+        [
+            'property_name',
+            'rank',
+            'feature_selection',
+            'fs_param',
+            'original_feature_count',
+            'selected_feature_count',
+            'selected_feature_idx_json',
+            'result_dir',
+            'run_config_path',
+        ]
+    ].copy() if not summary_df.empty else pd.DataFrame(
+        columns=[
+            'property_name',
+            'rank',
+            'feature_selection',
+            'fs_param',
+            'original_feature_count',
+            'selected_feature_count',
+            'selected_feature_idx_json',
+            'result_dir',
+            'run_config_path',
+        ]
+    )
+
+    summary_path = output_dir / 'metrics_summary.csv'
+    prediction_path = output_dir / 'prediction_table.csv'
+    parameter_path = output_dir / 'parameter_table.csv'
+    config_path = output_dir / 'run_config.json'
+
+    summary_df.to_csv(summary_path, index=False, encoding='utf-8-sig')
+    prediction_df.to_csv(prediction_path, index=False, encoding='utf-8-sig')
+    parameter_df.to_csv(parameter_path, index=False, encoding='utf-8-sig')
+    config_path.write_text(
+        json.dumps(
+            {
+                'property_names': property_names,
+                'model_type': 'PINN',
+                'preproc_mode': preproc_mode,
+                'sg_order': sg_order,
+                'sg_window': sg_window,
+                'feature_selection_method': feature_selection_method,
+                'fs_param': fs_param,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    return {
+        'metrics_summary_path': str(summary_path),
+        'prediction_table_path': str(prediction_path),
+        'parameter_table_path': str(parameter_path),
+        'config_path': str(config_path),
+    }
+
+
+def batch_compare_pinn_prediction(
+    property_names: List[str],
+    preproc_mode: str = 'sg+msc',
+    sg_order: int = 3,
+    sg_window: int = 15,
+    feature_selection_method: str = 'corr_topk',
+    fs_param: Any = None,
+) -> Dict[str, Any]:
+    """批量比较 PINN 在不同特征选择方法/特征维度下的表现。"""
+    property_names = [name.strip() for name in property_names if name.strip()]
+    if not property_names:
+        raise ValueError('property_names 不能为空')
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    safe_batch_name = '_'.join(_safe_tag(name) for name in property_names[:3])
+    if len(property_names) > 3:
+        safe_batch_name += f'_plus_{len(property_names) - 3}'
+    output_dir = PROJECT_ROOT / 'result' / 'pinn_compare' / f'{timestamp}_{safe_batch_name}'
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    plan = _pinn_fs_param_grid(feature_selection_method, fs_param)
+    total_jobs = len(property_names) * sum(len(params) for params in plan.values())
+    completed_jobs = 0
+    summary_rows: List[Dict[str, Any]] = []
+    prediction_rows: List[Dict[str, Any]] = []
+    raw_results: Dict[str, List[Dict[str, Any]]] = {}
+
+    _persist_pinn_compare_outputs(
+        output_dir=output_dir,
+        summary_rows=summary_rows,
+        prediction_rows=prediction_rows,
+        property_names=property_names,
+        preproc_mode=preproc_mode,
+        sg_order=sg_order,
+        sg_window=sg_window,
+        feature_selection_method=feature_selection_method,
+        fs_param=fs_param,
+    )
+
+    print(
+        f"开始PINN特征选择对比，共 {len(property_names)} 个属性，"
+        f"特征选择={feature_selection_method}，总任务数={total_jobs}"
+    )
+
+    for property_name in property_names:
+        property_results: List[Dict[str, Any]] = []
+        for current_method, param_list in plan.items():
+            print(f"[{property_name}] 开始 PINN 特征选择方法对比：fs={current_method}")
+            for current_param in param_list:
+                completed_jobs += 1
+                print(
+                    f"[{property_name}] PINN 对比进度 {completed_jobs}/{total_jobs} | "
+                    f"fs_method={current_method} | fs_param={current_param}"
+                )
+                result = run_pinn_prediction(
+                    property_name=property_name,
+                    preproc_mode=preproc_mode,
+                    sg_order=sg_order,
+                    sg_window=sg_window,
+                    fs_method=current_method,
+                    fs_param=current_param,
+                )
+                property_results.append(result)
+                summary_rows.append(_pinn_result_to_summary_row(property_name, result, len(property_results)))
+                _append_pinn_prediction_rows(prediction_rows, property_name, result)
+                persisted_paths = _persist_pinn_compare_outputs(
+                    output_dir=output_dir,
+                    summary_rows=summary_rows,
+                    prediction_rows=prediction_rows,
+                    property_names=property_names,
+                    preproc_mode=preproc_mode,
+                    sg_order=sg_order,
+                    sg_window=sg_window,
+                    feature_selection_method=feature_selection_method,
+                    fs_param=fs_param,
+                )
+                print(f"[{property_name}] PINN 中间结果已保存: {persisted_paths['metrics_summary_path']}")
+        property_results.sort(key=lambda item: item['test_metrics']['r2'], reverse=True)
+        raw_results[property_name] = property_results
+
+    persisted_paths = _persist_pinn_compare_outputs(
+        output_dir=output_dir,
+        summary_rows=summary_rows,
+        prediction_rows=prediction_rows,
+        property_names=property_names,
+        preproc_mode=preproc_mode,
+        sg_order=sg_order,
+        sg_window=sg_window,
+        feature_selection_method=feature_selection_method,
+        fs_param=fs_param,
+    )
+    print(f"PINN 特征选择对比完成，结果目录: {output_dir}")
+
+    return {
+        'output_dir': str(output_dir),
+        'metrics_summary_path': persisted_paths['metrics_summary_path'],
+        'prediction_table_path': persisted_paths['prediction_table_path'],
+        'parameter_table_path': persisted_paths['parameter_table_path'],
+        'config_path': persisted_paths['config_path'],
+        'results': raw_results,
+    }
+
+
 def run_property_prediction(
     property_name: str,
-    method_name: str = 'spa',
+    mode: str = 'train',
     preproc_mode: str = 'sg+msc',
     sg_order: int = 3,
     sg_window: int = 15,
     fs_method: Optional[str] = None,
     fs_param: Any = None,
+    include_preprocessed_group: bool = False,
 ) -> Any:
+    resolved_mode = (mode or 'train').lower().strip()
     if property_name.strip().lower() == 'list':
         return list_all_csv_headers()
-    if method_name.lower().strip() == 'select':
-        return process_by_all_csv_feature_selection_only(property_name, preproc_mode, sg_order, sg_window, fs_method or 'pca', fs_param)
-    if method_name.lower().strip() == 'fs':
-        return process_by_all_csv_with_feature_selection(property_name, preproc_mode, sg_order, sg_window, fs_method or 'cars', fs_param)
-    return process_by_all_csv_header(property_name, method_name, preproc_mode, sg_order, sg_window)
+    if resolved_mode == 'compare':
+        return batch_compare_property_prediction(
+            property_names=_parse_property_names(property_name),
+            preproc_mode=preproc_mode,
+            sg_order=sg_order,
+            sg_window=sg_window,
+            feature_selection_method=fs_method or 'pca',
+            include_preprocessed_group=include_preprocessed_group,
+        )
+    if resolved_mode == 'select':
+        return process_by_all_csv_feature_selection_only(
+            property_name,
+            preproc_mode,
+            sg_order,
+            sg_window,
+            fs_method or 'pca',
+            fs_param,
+        )
+    if resolved_mode == 'train':
+        return train_single_property_prediction(
+            property_name=property_name,
+            preproc_mode=preproc_mode,
+            sg_order=sg_order,
+            sg_window=sg_window,
+            fs_method=fs_method or 'corr_topk',
+            fs_param=fs_param,
+        )
+    raise ValueError(f'Unsupported mode: {resolved_mode}')
 
 
 def run_pinn_prediction(
@@ -368,6 +1056,8 @@ def run_pinn_prediction(
     preproc_mode: str = 'sg+msc',
     sg_order: int = 3,
     sg_window: int = 15,
+    fs_method: Optional[str] = None,
+    fs_param: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     运行PINN（物理信息神经网络）属性预测管道
@@ -391,21 +1081,42 @@ def run_pinn_prediction(
 
     # 数据准备
     print("准备PINN数据集...")
-    from .pinn.dataset import prepare_pinn_dataset
+    from .pinn.dataset import prepare_pinn_dataset_from_project_data
 
-    train_data, val_data, test_data = prepare_pinn_dataset(
+    resolved_fs_method = (fs_method or 'corr_topk').strip().lower()
+    resolved_fs_param = fs_param if fs_param is not None else _default_fs_param(resolved_fs_method)
+
+    dataset = prepare_pinn_dataset_from_project_data(
         property_name=property_name,
         preproc_mode=preproc_mode,
         sg_order=sg_order,
         sg_window=sg_window,
+        fs_method=resolved_fs_method,
+        fs_param=resolved_fs_param,
     )
+    dataset_metadata = dataset.get('metadata', {})
+    print(
+        'PINN特征选择: '
+        f"fs_method={dataset_metadata.get('fs_method') or 'none'} | "
+        f"fs_param={dataset_metadata.get('fs_param')} | "
+        f"原始波段数={dataset_metadata.get('original_feature_count')} | "
+        f"筛后波段数={dataset_metadata.get('selected_feature_count')} | "
+        f"选中索引={dataset_metadata.get('selected_feature_idx')}"
+    )
+    train_data = dataset['train']
+    val_data = dataset['val']
+    test_data = dataset['test']
+    collocation_data = dataset['collocation']
 
     # 模型训练
     print("训练PINN模型...")
     from .pinn.model import PINNNetwork
     from .pinn.loss import PINNLoss
 
-    model = PINNNetwork()
+    model = PINNNetwork(
+        nir_dim=int(train_data['X_nir'].shape[1]),
+        nose_dim=int(train_data['X_enose'].shape[1]),
+    )
     loss_fn = PINNLoss()
 
     history = train.train_pinn_two_stage(
@@ -413,14 +1124,15 @@ def run_pinn_prediction(
         loss_fn=loss_fn,
         train_data=train_data,
         val_data=val_data,
-        epochs=3000,  # PINN通常需要更多训练轮数
+        collocation_data=collocation_data,
+        total_epochs=3000,  # PINN通常需要更多训练轮数
         device='cuda' if torch.cuda.is_available() else 'cpu',
         verbose=True,
     )
 
     # 模型评估
     print("评估PINN模型...")
-    metrics = evaluate.evaluate_pinn(
+    metrics, y_pred = evaluate.evaluate_pinn(
         model=model,
         X_nir=test_data['X_nir'],
         X_enose=test_data['X_enose'],
@@ -428,18 +1140,70 @@ def run_pinn_prediction(
         temperatures=test_data['temperatures'],
         y_true=test_data['y'].numpy(),
         device='cuda' if torch.cuda.is_available() else 'cpu',
+        return_predictions=True,
     )
 
     # 可视化结果
     print("生成可视化结果...")
-    evaluate.plot_kinetics(
+    run_stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    pinn_result_dir = PROJECT_ROOT / 'result' / 'pinn' / f'{run_stamp}_{_safe_tag(property_name)}'
+    pinn_result_dir.mkdir(parents=True, exist_ok=True)
+    kinetics_plots = evaluate.plot_sparse_observation_kinetics(
         model=model,
-        X_nir=test_data['X_nir'][:3],  # 只显示前3个样本
-        X_enose=test_data['X_enose'][:3],
-        times_seq=test_data['times'].numpy()[:3],
-        temperatures=test_data['temperatures'][:3],
-        y_true=test_data['y'].numpy()[:3],
-        save_path=f"pinn_kinetics_{property_name}.png",
+        X_nir=test_data['X_nir'],
+        X_enose=test_data['X_enose'],
+        times_seq=test_data['times'].numpy().reshape(-1),
+        temperatures=test_data['temperatures'],
+        y_true=test_data['y'].numpy().reshape(-1),
+        save_path=str(pinn_result_dir / f"pinn_kinetics_{_safe_tag(property_name)}.png"),
+    )
+    scatter_plot_path = evaluate.plot_prediction_scatter(
+        y_true=test_data['y'].detach().cpu().numpy().reshape(-1),
+        y_pred=y_pred.reshape(-1),
+        metrics=metrics,
+        save_path=str(pinn_result_dir / f"pinn_prediction_scatter_{_safe_tag(property_name)}.png"),
+    )
+
+    prediction_df = pd.DataFrame(
+        {
+            'sample_index': list(range(1, len(y_pred) + 1)),
+            'time': test_data['times'].detach().cpu().numpy().reshape(-1),
+            'temperature_kelvin': test_data['temperatures'].detach().cpu().numpy().reshape(-1),
+            'y_true': test_data['y'].detach().cpu().numpy().reshape(-1),
+            'y_pred': y_pred.reshape(-1),
+        }
+    )
+    prediction_path = pinn_result_dir / 'prediction_table.csv'
+    prediction_df.to_csv(prediction_path, index=False, encoding='utf-8-sig')
+
+    metrics_path = pinn_result_dir / 'metrics.json'
+    serializable_metrics = {key: float(value) for key, value in metrics.items()}
+    metrics_path.write_text(json.dumps(serializable_metrics, ensure_ascii=False, indent=2), encoding='utf-8')
+
+    history_path = pinn_result_dir / 'training_history.csv'
+    pd.DataFrame({key: pd.Series(values) for key, values in history.items()}).to_csv(
+        history_path,
+        index=False,
+        encoding='utf-8-sig',
+    )
+
+    config_path = pinn_result_dir / 'run_config.json'
+    config_path.write_text(
+        json.dumps(
+            {
+                'property_name': property_name,
+                'model_type': 'PINN',
+                'preproc_mode': preproc_mode,
+                'sg_order': sg_order,
+                'sg_window': sg_window,
+                'fs_method': resolved_fs_method,
+                'fs_param': resolved_fs_param,
+                'dataset_metadata': dataset_metadata,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
     )
 
     result = {
@@ -447,12 +1211,20 @@ def run_pinn_prediction(
         'model_type': 'PINN',
         'training_history': history,
         'test_metrics': metrics,
+        'prediction_table_path': str(prediction_path),
+        'metrics_path': str(metrics_path),
+        'training_history_path': str(history_path),
+        'run_config_path': str(config_path),
+        'result_dir': str(pinn_result_dir),
+        'kinetics_plots': kinetics_plots,
+        'prediction_scatter_path': scatter_plot_path,
         'preprocessing': {
             'mode': preproc_mode,
             'sg_order': sg_order,
             'sg_window': sg_window,
-        }
+        },
+        'dataset_metadata': dataset_metadata,
     }
 
-    print(f"PINN预测完成 - R²: {metrics['r2']:.4f}, RMSE: {metrics['rmse']:.4f}")
+    print(f"PINN预测完成 - R2: {metrics['r2']:.4f}, RMSE: {metrics['rmse']:.4f}")
     return result

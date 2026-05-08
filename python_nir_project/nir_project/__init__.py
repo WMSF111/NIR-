@@ -28,7 +28,7 @@ from .data import (
     load_dataset,
 )
 from .preprocessing import preprocess_spectrum, preprocess_pair
-from .feature_selection import select_features_by_method
+from .feature_selection import quick_self_check_feature_selection, select_features_by_method
 from .modeling import train_model_from_dataset
 from .pipeline import compare_property_prediction_pipeline, run_property_prediction
 
@@ -58,6 +58,7 @@ __all__ = [
     'preprocess_spectrum',
     'preprocess_pair',
     'select_features_by_method',
+    'quick_self_check_feature_selection',
     'train_model_from_dataset',
     'compare_property_prediction_pipeline',
     'run_property_prediction',
