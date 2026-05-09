@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from .pipeline import batch_compare_pinn_prediction, run_pinn_prediction, run_property_prediction
 
@@ -18,6 +18,8 @@ def run_prediction(
     fs_method: str = 'corr_topk',
     fs_param: Optional[int] = None,
     include_preprocessed_group: bool = False,
+    traditional_config: Optional[Dict[str, Any]] = None,
+    pinn_config: Optional[Dict[str, Any]] = None,
 ):
     """根据模型类型运行传统模型或 PINN 流程。"""
     resolved_mode = mode.lower().strip()
@@ -33,6 +35,7 @@ def run_prediction(
                 sg_window=sg_window,
                 feature_selection_method=resolved_fs_method,
                 fs_param=fs_param,
+                pinn_config=pinn_config,
             )
         else:
             result = run_pinn_prediction(
@@ -42,6 +45,7 @@ def run_prediction(
                 sg_window,
                 fs_method=resolved_fs_method,
                 fs_param=fs_param,
+                pinn_config=pinn_config,
             )
     else:
         result = run_property_prediction(
@@ -53,6 +57,7 @@ def run_prediction(
             fs_method=fs_method,
             fs_param=fs_param,
             include_preprocessed_group=include_preprocessed_group,
+            traditional_config=traditional_config,
         )
     return result
 

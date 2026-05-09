@@ -473,6 +473,7 @@ def prepare_pinn_dataset_from_project_data(
     sg_window: int = 15,
     fs_method: Optional[str] = None,
     fs_param: Optional[int] = None,
+    input_mode: str = 'fusion',
     train_ratio: float = 0.7,
     val_ratio: float = 0.15,
     augment: bool = True,
@@ -486,6 +487,10 @@ def prepare_pinn_dataset_from_project_data(
     horizon: int = 1,
 ) -> Dict[str, Dict[str, torch.Tensor]]:
     """使用仓库内标准的 NIR/属性文件生成 PINN 训练数据集。"""
+    resolved_input_mode = (input_mode or 'fusion').strip().lower()
+    if resolved_input_mode not in {'nir', 'enose', 'fusion'}:
+        raise ValueError(f'Unsupported PINN input_mode: {input_mode}')
+
     y, _ = build_property_vector_from_all_csv(
         'data/physical/all_csv_data.csv',
         property_name,
@@ -533,11 +538,15 @@ def prepare_pinn_dataset_from_project_data(
     )
     if np.nanmax(temperatures) < 200:
         temperatures = temperatures + 273.15
-    X_enose = _extract_enose_features(metadata_rows, y.shape[0], required=require_enose)
+    enose_required = require_enose or resolved_input_mode in {'enose', 'fusion'}
+    X_enose = _extract_enose_features(metadata_rows, y.shape[0], required=enose_required)
 
     resolved_fs_method = (fs_method or '').strip().lower()
     selected_feature_idx = None
     original_feature_count = int(X_nir.shape[1])
+    if resolved_input_mode == 'enose':
+        resolved_fs_method = ''
+        fs_param = None
     if resolved_fs_method and resolved_fs_method != 'none':
         if resolved_fs_method == 'all':
             raise ValueError('PINN does not support fs_method=all; please choose one concrete method')
@@ -555,6 +564,11 @@ def prepare_pinn_dataset_from_project_data(
         context_size=context_size,
         horizon=horizon,
     )
+
+    if resolved_input_mode == 'nir':
+        X_enose = np.zeros((X_enose.shape[0], 1), dtype=np.float32)
+    elif resolved_input_mode == 'enose':
+        X_nir = np.zeros((X_nir.shape[0], 1), dtype=np.float32)
 
     mode_tokens = parse_preproc_mode(preproc_mode)
     dataset = prepare_pinn_dataset(
@@ -578,6 +592,7 @@ def prepare_pinn_dataset_from_project_data(
         random_state=random_state,
     )
     dataset['metadata'] = {
+        'input_mode': resolved_input_mode,
         'selected_feature_idx': selected_feature_idx.tolist() if selected_feature_idx is not None else None,
         'fs_method': resolved_fs_method or None,
         'fs_param': fs_param,

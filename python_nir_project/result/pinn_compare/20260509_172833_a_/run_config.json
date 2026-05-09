@@ -1,0 +1,92 @@
+{
+  "property_names": [
+    "a*"
+  ],
+  "model_type": "PINN",
+  "preproc_mode": "sg+msc+snv",
+  "sg_order": 3,
+  "sg_window": 5,
+  "feature_selection_method": "all",
+  "fs_param": null,
+  "data_sources": {
+    "property_table_csv": "D:\\HXR\\NIR\\python_nir_project\\data\\physical\\all_csv_data.csv",
+    "nir_data_dir": "D:\\HXR\\NIR\\python_nir_project\\data\\NIR",
+    "black_white_dir": "D:\\HXR\\NIR\\python_nir_project\\data\\Black white"
+  },
+  "pinn_config": {
+    "input_mode": "nir",
+    "dataset_options": {
+      "train_ratio": 0.7,
+      "val_ratio": 0.15,
+      "augment": true,
+      "mixup_alpha": 0.2,
+      "mixup_samples": 100,
+      "random_state": 1,
+      "require_times": true,
+      "require_temperatures": true,
+      "require_enose": false,
+      "context_size": 2,
+      "horizon": 1
+    },
+    "model_params": {
+      "nir_hidden": [
+        128,
+        64
+      ],
+      "nose_hidden": [
+        32,
+        16
+      ],
+      "shared_hidden": [
+        128,
+        64,
+        32
+      ],
+      "physics_dim": 2,
+      "output_dim": 1,
+      "activation": "relu",
+      "dropout": 0.0,
+      "output_activaton": null
+    },
+    "loss_params": {
+      "E_a": 100000.0,
+      "k0": 0.001,
+      "R": 8.314,
+      "w_data": 1.0,
+      "w_physics": 0.001,
+      "kinetics_order": 1
+    },
+    "train_params": {
+      "stage1_ratio": 0.67,
+      "stage1_epochs": 2000,
+      "stage2_epochs": 1000,
+      "stage1_lr": 0.001,
+      "stage2_lr": 1.0
+    }
+  },
+  "compare_plan": {
+    "cars": [
+      120,
+      150
+    ],
+    "pca": [
+      40,
+      80,
+      120,
+      160,
+      200
+    ],
+    "corr_topk": [
+      20,
+      40,
+      80,
+      120
+    ],
+    "spa": [
+      8,
+      12,
+      16,
+      20
+    ]
+  }
+}
