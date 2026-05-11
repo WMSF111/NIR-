@@ -1,4 +1,8 @@
-"""PINN 训练中的损失函数，包含数据损失与 Arrhenius 物理约束损失。"""
+"""PINN 训练中的损失函数，包含数据损失与 Arrhenius 物理约束损失。
+
+本模块提供PINN训练中常用的损失结构，包括监督数据损失、
+物理约束损失以及可选的动力学参数光滑性正则项。
+"""
 
 import torch
 import torch.nn as nn

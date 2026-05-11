@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-"""PINN 数据准备模块，负责预处理、增强、切分与项目数据适配。"""
+"""PINN 数据准备模块，负责预处理、增强、切分与项目数据适配。
+
+该模块用于从项目内NIR和物理属性数据创建PINN训练所需的
+训练/验证/测试/配点数据集。
+"""
 
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -262,7 +266,7 @@ def _build_sliding_forecast_windows(
     temperatures: np.ndarray,
     trajectory_ids: np.ndarray,
     *,
-    context_size: int = 2,
+    context_size: int = 2, # 根据前context_size个点预测下一个点
     horizon: int = 1,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """按轨迹构造滑窗样本，用前若干点预测后一个点。"""

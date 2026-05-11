@@ -140,6 +140,9 @@ class PINNNetwork(nn.Module):
         """
         前向传播计算质量预测值
 
+        该方法将NIR、E-nose和物理参数进行融合后，
+        输出模型对待预测质量指标的估计。
+
         Args:
             X_nir (torch.Tensor): NIR光谱特征，形状为[batch_size, nir_dim]
             X_nose (torch.Tensor): E-nose传感器特征，形状为[batch_size, nose_dim]
@@ -207,6 +210,8 @@ class PINNNetwork(nn.Module):
     ) -> torch.Tensor:
         """
         计算预测质量对温度的导数 dC/dT
+
+        该导数可用于分析温度对物质降解行为的敏感性。
 
         Args:
             X_nir (torch.Tensor): NIR光谱特征，形状为[batch_size, nir_dim]

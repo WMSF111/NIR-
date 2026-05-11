@@ -1,4 +1,7 @@
-"""PINN 模型的评估与可视化工具。"""
+"""PINN 模型的评估与可视化工具。
+
+本模块用于计算模型预测指标、绘制对比图和评估完整轨迹预测。
+"""
 
 import torch
 import numpy as np
@@ -18,7 +21,11 @@ def evaluate_scalar_observations(
     time_points: np.ndarray,
     sample_ids: List[int],
 ) -> Dict[str, float]:
-    """评估 PINN 在稀疏标量观测点上的预测精度。"""
+    """评估 PINN 在稀疏标量观测点上的预测精度。
+
+    本函数用于衡量模型在少量监测点上的回归表现，
+    返回R²、RMSE、MAE、RPD等指标。
+    """
     predictions = np.asarray(predictions)
     observations = np.asarray(observations)
     time_points = np.asarray(time_points)
@@ -50,7 +57,11 @@ def evaluate_trajectory_predictions(
     ground_truth: np.ndarray,
     time_grid: np.ndarray,
 ) -> Dict[str, float]:
-    """评估完整时序轨迹预测。"""
+    """评估完整时序轨迹预测。
+
+    该函数用于比较模型预测的全轨迹与真实轨迹，
+    适合长时间序列预测性能评估。
+    """
     predictions = np.asarray(predictions)
     ground_truth = np.asarray(ground_truth)
     time_grid = np.asarray(time_grid)
@@ -83,6 +94,9 @@ def evaluate_pinn(
     评估PINN模型性能
 
     计算常用的回归评估指标，包括决定系数、均方根误差等。
+
+    该函数适用于已训练PINN模型的直接评估，
+    支持返回预测结果用于可视化或对比。
     这些指标用于衡量模型的预测准确性和泛化能力。
 
     Args:
@@ -138,6 +152,9 @@ def compare_models(
     """
     对比多个模型的性能
 
+    该函数逐个评估传入模型并返回它们的指标，
+    便于在同一数据集上进行多模型对比分析。
+
     同时评估多个PINN模型或传统机器学习模型的性能，
     为模型选择和性能比较提供依据。
 
@@ -185,6 +202,9 @@ def plot_comparison(
 ):
     """
     绘制预测值vs真实值对比散点图
+
+    该函数为每个模型绘制散点图，
+    用于直观比较预测结果与真实值之间的偏差。
 
     为每个模型生成散点图，展示预测值与真实值的相关性。
     对角线表示完美预测，数据点越接近对角线，模型性能越好。

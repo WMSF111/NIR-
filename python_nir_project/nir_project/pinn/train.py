@@ -1,4 +1,7 @@
-"""PINN 模型的训练工具函数。"""
+"""PINN 模型的训练工具函数。
+
+本模块实现了PINN的单阶段和两阶段训练策略，支持Adam预热和L-BFGS精调。
+"""
 
 from __future__ import annotations
 
@@ -17,7 +20,11 @@ def _compute_pinn_losses(
     train_batch: Dict[str, torch.Tensor],
     collocation_batch: Dict[str, torch.Tensor],
 ) -> Dict[str, torch.Tensor]:
-    """分别在监督批次和配点批次上计算数据损失与物理损失。"""
+    """分别在监督批次和配点批次上计算数据损失与物理损失。
+
+    该函数用于PINN训练的核心损失计算，
+    同时覆盖模型预测和物理约束项。
+    """
     C_pred = model(
         train_batch['X_nir'],
         train_batch['X_enose'],
@@ -66,7 +73,11 @@ def train_pinn(
     verbose: bool = True,
     checkpoint_every: int = 500,
 ) -> Dict[str, List[float]]:
-    """使用单阶段优化器训练 PINN 模型。"""
+    """使用单阶段优化器训练 PINN 模型。
+
+    该函数支持Adam和SGD优化器，
+    适用于快速验证PINN模型的训练效果。
+    """
     model = model.to(device)
 
     if optimizer_type.lower() == 'adam':
@@ -156,6 +167,9 @@ def train_pinn_two_stage(
 ) -> Dict[str, List[float]]:
     """先用 Adam 预热，再用 L-BFGS 精调的两阶段 PINN 训练。
 
+    该函数实现了典型的PINN训练策略：先用Adam稳定训练，
+    再用L-BFGS做精细最优化。
+    
     默认使用 `total_epochs` 作为总训练轮数语义，并通过 `stage1_ratio`
     自动切分两阶段轮数。若显式传入 `stage1_epochs` 和 `stage2_epochs`，
     则优先使用显式配置。
